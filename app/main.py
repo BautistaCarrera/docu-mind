@@ -61,7 +61,17 @@ def health():
 
 
 @app.post("/api/upload")
-async def upload_document(request: Request, file: UploadFile = File(...)):
+def upload_document(request: Request, file: UploadFile = File(...)):
+    """OJO: a propósito NO es `async def`. Acá adentro se hace trabajo de
+    CPU pesado (parseo de PDF + generación de embeddings), que puede tardar
+    varios segundos con documentos grandes. Si esto fuera `async def`,
+    correría directo en el event loop de asyncio y bloquearía TODO el
+    servidor para TODOS los usuarios mientras dura el procesamiento —
+    incluso /api/health quedaría colgado (confirmado en QA: una subida de
+    150 páginas bloqueó 6 health-checks concurrentes ~29s cada uno). Al
+    dejarlo como `def` normal, FastAPI lo corre en un thread pool aparte,
+    y el resto de la app sigue respondiendo mientras tanto.
+    """
     client_ip = get_client_ip(request)
     if not check_upload_limit_ip(client_ip, MAX_UPLOADS_PER_IP):
         raise HTTPException(
@@ -71,7 +81,7 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Solo se aceptan archivos PDF.")
 
-    content = await file.read()
+    content = file.file.read()
     if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(400, f"El archivo supera el límite de {MAX_FILE_SIZE_MB}MB.")
 
