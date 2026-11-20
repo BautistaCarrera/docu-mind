@@ -94,6 +94,30 @@ confirmado como correcto (variación normal de muestreo del LLM, no un bug de
 lógica) — con cualquier sistema basado en LLM hay que asumir que no es 100%
 determinístico, y está bien documentarlo así en vez de esconderlo.
 
+| 19 | **A escala (10 documentos cargados a la vez: 8 PDF + 2 TXT), una pregunta de 3 temas se quedaba sin uno** | Pregunté por envío de la Empresa Sur, garantía del Producto A, y horario de la Sucursal Centro en un solo mensaje → respondió solo 2 de los 3, el horario faltaba | Medido con precisión: el chunk de "Sucursal Centro" tenía distancia 0.698 (**dentro** del umbral 0.75), pero quedó en el puesto #5 del ranking — `TOP_K=4` ya estaba lleno con los 4 chunks de los dos temas "gemelos" (Empresa Norte Y Sur comparten vocabulario de envíos, Producto A Y B comparten vocabulario de garantía), sin dejar lugar para el tercer tema. El dato existía y pasaba el umbral, pero nunca llegaba a pedirse | Subido `TOP_K` de 4 a 8. Confirmado con el mismo caso (ahora responde los 3 correctamente, citando cada uno a su documento exacto — Sur no Norte, A no B — aunque el contexto incluya hasta 7 documentos "distractores"), y con regresión completa de las rondas 1-5 para confirmar que más contexto no generó mezcla de información en ningún caso anterior |
+
+## Ronda 6 — escala: 10 documentos simultáneos (8 PDF + 2 TXT)
+
+8 casos contra el motor real con 10 documentos cargados a la vez, diseñados a
+propósito con "pares gemelos" (mismo tipo de dato, valor distinto) para
+maximizar el riesgo de confusión:
+
+- 4 preguntas "trampa" (ej: "¿cuánto cuesta el envío de la Empresa Norte?"
+  cuando también existe un documento casi idéntico de la Empresa Sur) — las
+  4 devolvieron el valor correcto del documento correcto, sin traer el del
+  "gemelo".
+- 1 pregunta de 3 temas a la vez (reveló el bug #19 de arriba, ya corregido).
+- Matching de nombre de archivo entre 10 candidatos (no solo 2-3 como en
+  rondas anteriores) — siguió identificando el documento correcto sin
+  ambigüedad falsa.
+
+8/8 casos OK tras el fix de `TOP_K`. Nota honesta: durante la regresión de
+rondas anteriores aparecieron 2 fallas puntuales con mensaje de error de API
+("tuve un problema para responder") — se reprodujeron en aislado 3/3 veces sin
+error, confirmando que fueron blips transitorios de la API de Gemini (lógico
+tras cientos de llamados reales en una sola sesión de QA), no causados por el
+cambio de `TOP_K` ni un bug de lógica nuevo.
+
 ## Agregado al soportar TXT y DOCX (además del bug #10 de arriba)
 
 - **Límite de retrieval con vocabulario muy repetitivo (no es un bug típico, es honesto documentarlo)**: se armó un `.txt` de 3000 líneas con palabras aleatorias de un pool chico — "descuento" aparecía como ruido en casi todos los chunks. Al preguntar por el código de descuento real (que estaba en una sola línea), el agente escaló mal porque el chunk correcto ni entraba en el top-20 de la búsqueda semántica — quedó enterrado entre cientos de chunks que lexicalmente se parecen por compartir la misma palabra de ruido. **Importante**: esto es un caso adversarial que yo mismo construí (puse la palabra clave de la respuesta real como palabra de relleno en todo el resto del documento) — no es representativo de un documento real. Se repitió el mismo test con contenido realista (oraciones coherentes, no ensalada de palabras) en un documento de tamaño similar y **funcionó perfecto**. Queda documentado como limitación conocida de `TOP_K=4` ante vocabulario muy repetitivo, no como un fix aplicado.
