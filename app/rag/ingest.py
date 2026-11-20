@@ -1,6 +1,9 @@
 import io
 
 from docx import Document
+from docx.oxml.ns import qn
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
 
 SUPPORTED_EXTENSIONS = (".pdf", ".txt", ".docx")
@@ -37,12 +40,39 @@ def _extract_pdf(file_bytes: bytes) -> list[str]:
 
 
 def _extract_docx(file_bytes: bytes) -> list[str]:
+    """Recorre el documento en orden (párrafos Y tablas) — iterar solo
+    `doc.paragraphs` (el atajo obvio de python-docx) IGNORA por completo
+    el texto dentro de tablas, y eso es pérdida silenciosa de datos: un
+    .docx con una tabla de precios/specs queda indexado sin esos datos y
+    el agente escala con 'no tengo esa información' aunque sí estaba en
+    el archivo (encontrado en QA — ver TESTING.md)."""
     try:
         doc = Document(io.BytesIO(file_bytes))
-        full_text = "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        parts = []
+        for block in _iter_block_items(doc):
+            if isinstance(block, Paragraph):
+                if block.text.strip():
+                    parts.append(block.text.strip())
+            elif isinstance(block, Table):
+                for row in block.rows:
+                    cells = [c.text.strip() for c in row.cells]
+                    if any(cells):
+                        parts.append(" | ".join(cells))
+        full_text = "\n\n".join(parts)
     except Exception as exc:  # python-docx lanza BadZipFile / PackageNotFoundError, etc.
         raise ValueError(f"El archivo no es un .docx válido o está corrupto: {exc}") from exc
     return _split_into_sections(full_text)
+
+
+def _iter_block_items(doc: Document):
+    """Itera párrafos y tablas en el orden real en que aparecen en el
+    documento (patrón estándar de python-docx — no lo expone directo)."""
+    body = doc.element.body
+    for child in body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield Paragraph(child, doc)
+        elif child.tag == qn("w:tbl"):
+            yield Table(child, doc)
 
 
 def _extract_txt(file_bytes: bytes) -> list[str]:

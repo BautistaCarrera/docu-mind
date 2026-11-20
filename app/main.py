@@ -93,7 +93,8 @@ def upload_document(request: Request, file: UploadFile = File(...)):
         raise HTTPException(400, str(exc))
 
     if not any(p.strip() for p in pages):
-        raise HTTPException(400, "No se pudo extraer texto del archivo (¿es un escaneo sin OCR?).")
+        hint = " (¿es un escaneo sin OCR?)" if file.filename.lower().endswith(".pdf") else ""
+        raise HTTPException(400, f"No se pudo extraer texto del archivo.{hint}")
 
     chunks = chunk_pages(pages)
     if not chunks:
