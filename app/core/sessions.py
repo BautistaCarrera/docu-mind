@@ -8,18 +8,37 @@ from app.rag.store import delete_collection
 _sessions: dict[str, dict] = {}
 
 
+MAX_HISTORY_TURNS = 3  # cuantos intercambios previos se recuerdan por sesión
+
+
 def create_session(session_id: str, filename: str, chunks: int):
     _cleanup_expired()
     _sessions[session_id] = {
         "filename": filename,
         "chunks": chunks,
         "created_at": time.time(),
+        "history": [],
     }
 
 
 def session_exists(session_id: str) -> bool:
     _cleanup_expired()
     return session_id in _sessions
+
+
+def get_history(session_id: str) -> list[dict]:
+    """Últimos intercambios (pregunta/respuesta) de la sesión, para resolver
+    preguntas de seguimiento tipo '¿y cuánto tarda?' sin repetir el tema."""
+    session = _sessions.get(session_id)
+    return session["history"] if session else []
+
+
+def add_to_history(session_id: str, question: str, answer: str):
+    session = _sessions.get(session_id)
+    if session is None:
+        return
+    session["history"].append({"question": question, "answer": answer})
+    session["history"] = session["history"][-MAX_HISTORY_TURNS:]
 
 
 def _cleanup_expired():

@@ -11,6 +11,7 @@ from app.core.config import (
     SIMILARITY_THRESHOLD,
     MAX_MESSAGES_PER_IP,
     MAX_UPLOADS_PER_IP,
+    TRUST_PROXY_HEADERS,
 )
 from app.core import sessions
 from app.rag.ingest import extract_pages
@@ -36,11 +37,21 @@ class ChatRequest(BaseModel):
 
 
 def get_client_ip(request: Request) -> str:
-    """Toma la IP real del cliente, contemplando que en producción (Render/
-    Hugging Face Spaces) la app corre detrás de un proxy inverso."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Toma la IP real del cliente para el rate limiting.
+
+    OJO: X-Forwarded-For lo puede mandar el propio cliente y rotarlo en
+    cada request — confiar en él ciegamente permite esquivar el límite
+    por IP por completo (encontrado en QA). Solo se usa si TRUST_PROXY_HEADERS
+    está activado explícitamente, para cuando la app corre detrás de un
+    proxy de confianza (Render/Hugging Face Spaces) que lo sobreescribe
+    con la IP real antes de que llegue a nosotros. Por defecto, se usa la
+    IP de la conexión TCP (`request.client.host`), que el cliente no puede
+    falsificar a nivel aplicación.
+    """
+    if TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -110,6 +121,21 @@ def chat(request: Request, req: ChatRequest):
     metadatas = results.get("metadatas", [[]])[0]
     distances = results.get("distances", [[]])[0]
 
+    history = sessions.get_history(req.session_id)
+
+    # Si la búsqueda inicial no encuentra nada relevante, reintentamos
+    # combinando la pregunta actual con la anterior — cubre preguntas de
+    # seguimiento tipo "¿y cuánto tarda?" que por sí solas no tienen
+    # suficiente contexto semántico para que el retrieval las matchee
+    # (encontrado en QA: ver TESTING.md).
+    if not any(dist <= SIMILARITY_THRESHOLD for dist in distances) and history:
+        contextual_query = f"{history[-1]['question']} {req.message}"
+        contextual_embedding = embed_texts([contextual_query])[0]
+        results = query_collection(req.session_id, contextual_embedding, top_k=TOP_K)
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
+
     # Solo se consideran "fuente" los fragmentos realmente parecidos a la
     # pregunta — así no se cita una página que el modelo nunca usó.
     relevant_chunks = [
@@ -125,8 +151,10 @@ def chat(request: Request, req: ChatRequest):
             "escalate": True,
         }
 
-    result = generate_answer(req.message, relevant_chunks)
+    result = generate_answer(req.message, relevant_chunks, history=history)
     sources = sorted({c["page"] for c in relevant_chunks}) if not result["escalate"] else []
+
+    sessions.add_to_history(req.session_id, req.message, result["answer"])
 
     return {"answer": result["answer"], "sources": sources, "escalate": result["escalate"]}
 
