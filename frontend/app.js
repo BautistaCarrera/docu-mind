@@ -12,7 +12,7 @@ const sendBtn = document.getElementById("send-btn");
 uploadBtn.addEventListener("click", async () => {
   const file = fileInput.files[0];
   if (!file) {
-    uploadStatus.textContent = "Elegí un archivo PDF primero.";
+    uploadStatus.textContent = "Elegí un archivo primero (PDF, TXT o DOCX).";
     return;
   }
   uploadStatus.textContent = "Procesando documento...";
@@ -51,7 +51,8 @@ async function sendMessage() {
     if (!res.ok) throw new Error(data.detail || "Error en el chat");
     let text = data.answer;
     if (data.sources && data.sources.length > 0) {
-      text += ` (Fuente: página ${data.sources.join(", ")})`;
+      const label = data.source_label || "página";
+      text += ` (Fuente: ${label} ${data.sources.join(", ")})`;
     }
     addMessage("agent", text, data.escalate);
   } catch (err) {

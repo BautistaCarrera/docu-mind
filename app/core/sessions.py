@@ -11,11 +11,12 @@ _sessions: dict[str, dict] = {}
 MAX_HISTORY_TURNS = 3  # cuantos intercambios previos se recuerdan por sesión
 
 
-def create_session(session_id: str, filename: str, chunks: int):
+def create_session(session_id: str, filename: str, chunks: int, unit_label: str = "página"):
     _cleanup_expired()
     _sessions[session_id] = {
         "filename": filename,
         "chunks": chunks,
+        "unit_label": unit_label,
         "created_at": time.time(),
         "history": [],
     }
@@ -24,6 +25,13 @@ def create_session(session_id: str, filename: str, chunks: int):
 def session_exists(session_id: str) -> bool:
     _cleanup_expired()
     return session_id in _sessions
+
+
+def get_unit_label(session_id: str) -> str:
+    """'página' para PDF, 'sección' para .txt/.docx (no tienen paginación
+    real — citar 'página 3' de un .txt sería una cita falsa)."""
+    session = _sessions.get(session_id)
+    return session["unit_label"] if session else "página"
 
 
 def get_history(session_id: str) -> list[dict]:

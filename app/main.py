@@ -14,7 +14,7 @@ from app.core.config import (
     TRUST_PROXY_HEADERS,
 )
 from app.core import sessions
-from app.rag.ingest import extract_pages
+from app.rag.ingest import extract_content, SUPPORTED_EXTENSIONS
 from app.rag.chunking import chunk_pages
 from app.rag.embeddings import embed_texts
 from app.rag.store import add_chunks, query_collection
@@ -78,20 +78,22 @@ def upload_document(request: Request, file: UploadFile = File(...)):
             429, "Límite de documentos subidos alcanzado para esta demo pública. Probá de nuevo más tarde."
         )
 
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "Solo se aceptan archivos PDF.")
+    if not file.filename or not file.filename.lower().endswith(SUPPORTED_EXTENSIONS):
+        raise HTTPException(
+            400, f"Extensión no soportada. Aceptamos: {', '.join(SUPPORTED_EXTENSIONS)}"
+        )
 
     content = file.file.read()
     if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(400, f"El archivo supera el límite de {MAX_FILE_SIZE_MB}MB.")
 
     try:
-        pages = extract_pages(content)
+        pages, unit_label = extract_content(file.filename, content)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
     if not any(p.strip() for p in pages):
-        raise HTTPException(400, "No se pudo extraer texto del PDF (¿es un escaneo sin OCR?).")
+        raise HTTPException(400, "No se pudo extraer texto del archivo (¿es un escaneo sin OCR?).")
 
     chunks = chunk_pages(pages)
     if not chunks:
@@ -102,7 +104,7 @@ def upload_document(request: Request, file: UploadFile = File(...)):
 
     session_id = str(uuid.uuid4())
     add_chunks(session_id, chunks, embeddings)
-    sessions.create_session(session_id, file.filename, len(chunks))
+    sessions.create_session(session_id, file.filename, len(chunks), unit_label)
 
     return {
         "session_id": session_id,
@@ -166,7 +168,12 @@ def chat(request: Request, req: ChatRequest):
 
     sessions.add_to_history(req.session_id, req.message, result["answer"])
 
-    return {"answer": result["answer"], "sources": sources, "escalate": result["escalate"]}
+    return {
+        "answer": result["answer"],
+        "sources": sources,
+        "source_label": sessions.get_unit_label(req.session_id),
+        "escalate": result["escalate"],
+    }
 
 
 # Frontend estático servido al final para no pisar las rutas /api/*.

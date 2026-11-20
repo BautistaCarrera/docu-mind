@@ -1,8 +1,9 @@
 # DocuMind
 
-Agente de soporte documental: subís un PDF (manual, catálogo, FAQ) y le hacés preguntas
-por un chat. El agente responde **citando la página exacta** de donde sacó la info, y si
-no encuentra la respuesta en el documento, lo dice en vez de inventar — y simula el
+Agente de soporte documental: subís un documento (PDF, TXT o DOCX — manual, catálogo,
+FAQ) y le hacés preguntas por un chat. El agente responde **citando de dónde sacó la
+info** (página real para PDF, sección aproximada para TXT/DOCX que no tienen paginación),
+y si no encuentra la respuesta en el documento, lo dice en vez de inventar — y simula el
 escalamiento a una persona humana.
 
 Pensado para pymes que necesitan dar soporte sin que un humano responda siempre la misma
@@ -79,16 +80,32 @@ Pregunta del usuario → embedding → retrieval top-k en Chroma
   esquivar el rate limit por IP mandando un header distinto en cada request. Se corre
   siempre con `--no-proxy-headers` salvo que se confirme explícitamente un proxy de
   confianza real adelante (ver nota de seguridad abajo).
+- **`/api/upload` es `def`, no `async def`, a propósito**: adentro se hace trabajo de
+  CPU 100% síncrono (parseo + embeddings). Si fuera `async def`, bloquearía el event
+  loop de asyncio entero mientras procesa — tumbando la app para TODOS los usuarios con
+  un solo upload pesado (confirmado en QA: 6 health-checks concurrentes tardaron ~29s
+  cada uno con esto roto). Como `def` normal, FastAPI lo corre en un thread pool aparte.
+- **El TTL de sesiones corre un `VACUUM` al borrar una colección**: `delete_collection()`
+  de Chroma hace un borrado lógico, no reduce el tamaño del `.sqlite3` en disco (es
+  comportamiento estándar de SQLite). Sin el `VACUUM` explícito, una demo pública de
+  larga duración crecería en disco para siempre aunque el TTL "funcionara" a nivel app.
+- **Tres formatos soportados (PDF, TXT, DOCX), con citas honestas por formato**: TXT y
+  DOCX no tienen paginación real, así que agrupar su texto en bloques y llamarlos
+  "página" sería una cita falsa — se citan como "sección" en su lugar. La extracción
+  está en `app/rag/ingest.py` con un dispatcher por extensión, fácil de sumar formatos
+  nuevos (ej. `.md`) sin tocar el resto del pipeline.
 
 ## Testing
 
-QA sistemático contra el server real en 2 rondas: documentos variados, idiomas
-cruzados, prompt injection embebido en PDFs y en el chat (4 técnicas de jailbreak),
-archivos corruptos, memoria conversacional, rate limiting bajo carga real y
-concurrencia (25 requests simultáneos), spoofing de headers, documento de 60 páginas.
-6 bugs reales encontrados y corregidos con causa raíz documentada — incluida una
-vulnerabilidad real de nivel servidor (uvicorn confiando en `X-Forwarded-For` por
-defecto). Ver [`TESTING.md`](./TESTING.md).
+QA sistemático contra el server real en 3 rondas: documentos variados (PDF/TXT/DOCX),
+idiomas cruzados, prompt injection embebido en PDFs y en el chat (4 técnicas de
+jailbreak), archivos corruptos, memoria conversacional, conversaciones de hasta 8
+turnos, rate limiting bajo carga real y concurrencia (25 requests simultáneos),
+spoofing de headers, documentos grandes (hasta 3000 páginas), y carga pesada real
+(5 uploads simultáneos de 150 páginas). **9 bugs reales encontrados y corregidos**
+con causa raíz documentada, incluyendo una vulnerabilidad real de nivel servidor
+(uvicorn confiando en `X-Forwarded-For` por defecto) y un bloqueo total del event
+loop con un solo upload pesado. Ver [`TESTING.md`](./TESTING.md).
 
 ## Stack
 
@@ -132,10 +149,12 @@ docker run -p 8000:8000 --env-file .env docu-mind
 
 ### Roadmap
 - [x] Backend RAG completo (ingestión, chunking, embeddings, retrieval, citas, escalamiento)
-- [x] Frontend de chat con upload de PDF
-- [x] Rate limiting por sesión + IP, expiración de sesiones (TTL), filtro de relevancia por umbral de similitud
-- [x] QA sistemático con 20+ escenarios reales en 2 rondas, 6 bugs encontrados y
-      corregidos incluyendo una vulnerabilidad real de rate-limit bypass (ver `TESTING.md`)
+- [x] Soporte multi-formato: PDF, TXT y DOCX, con citas honestas por formato
+- [x] Frontend de chat con upload de documentos
+- [x] Rate limiting por sesión + IP, expiración de sesiones (TTL) con liberación real de disco, filtro de relevancia por umbral de similitud
+- [x] QA sistemático con 25+ escenarios reales en 3 rondas, 9 bugs encontrados y
+      corregidos — incluyendo un bloqueo total del servidor y una vulnerabilidad real
+      de rate-limit bypass (ver `TESTING.md`)
 - [x] Memoria conversacional corta (últimos 3 intercambios por sesión)
 - [ ] Deploy público (Hugging Face Spaces / Render, gratis)
 - [ ] Integración WhatsApp (v2)
