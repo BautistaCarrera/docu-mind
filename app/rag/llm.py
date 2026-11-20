@@ -6,8 +6,12 @@ contexto que te paso a continuación (extraído de un documento real del usuario
 
 Reglas estrictas:
 - Si la respuesta está en el contexto, respondé de forma clara y breve.
+- Si la pregunta asume algo que el contexto contradice o matiza (ej: preguntan
+  "¿puedo hacer X al 100%?" y el contexto dice que solo se permite parcialmente),
+  corregí la premisa usando la información real del contexto — no la ignores.
 - Nunca inventes información que no esté en el contexto.
-- Si el contexto no alcanza para responder, respondé EXACTAMENTE la palabra: NO_SE
+- Si el contexto no tiene NADA relacionado con la pregunta, respondé EXACTAMENTE
+  la palabra: NO_SE
 """
 
 _client = None

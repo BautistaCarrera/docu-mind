@@ -64,7 +64,11 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(400, f"El archivo supera el límite de {MAX_FILE_SIZE_MB}MB.")
 
-    pages = extract_pages(content)
+    try:
+        pages = extract_pages(content)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
     if not any(p.strip() for p in pages):
         raise HTTPException(400, "No se pudo extraer texto del PDF (¿es un escaneo sin OCR?).")
 
@@ -90,6 +94,8 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 def chat(request: Request, req: ChatRequest):
     client_ip = get_client_ip(request)
 
+    if not req.message.strip():
+        raise HTTPException(400, "El mensaje no puede estar vacío.")
     if not sessions.session_exists(req.session_id):
         raise HTTPException(404, "Sesión no encontrada o expirada. Subí un documento de nuevo.")
     if not check_rate_limit(req.session_id):

@@ -6,8 +6,10 @@ _model = None
 def get_model() -> SentenceTransformer:
     global _model
     if _model is None:
-        # Modelo liviano, corre local en CPU, cero costo de API.
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        # Modelo multilingüe (ES/EN/PT/etc.) — liviano, corre local en CPU,
+        # cero costo de API. Necesario porque muchos manuales/catálogos
+        # reales vienen en inglés aunque el usuario pregunte en español.
+        _model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
     return _model
 
 
