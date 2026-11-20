@@ -5,6 +5,15 @@ objetivo: encontrar fallas reales antes que las encuentre un usuario, con
 documentos y preguntas que podrían pasar en la vida real — no solo el caso
 feliz.
 
+> **Nota sobre la migración a Telegram**: los bugs #1-11 de abajo se
+> encontraron contra la versión web (FastAPI + HTML/JS), que fue
+> reemplazada por completo por un bot de Telegram (`app/bot.py`). El
+> motor RAG (`app/rag/*`) no cambió en la migración, así que esos
+> hallazgos siguen siendo válidos y relevantes — lo que cambió es la
+> puerta de entrada, no la lógica de retrieval/generación. Los bugs
+> #12 en adelante son específicos de la versión Telegram (soporte
+> multi-documento, resúmenes).
+
 ## Metodología
 
 1. Se generaron documentos de prueba variados (rubros distintos, idiomas
@@ -35,6 +44,26 @@ feliz.
 | 9 | **El TTL de sesiones no liberaba disco de verdad** (el README/código decía "al expirar se borra la colección") | Una sesión expirada quedaba inaccesible a nivel API (404 correcto), pero el archivo `chroma.sqlite3` seguía pesando exactamente lo mismo | `client.delete_collection()` de Chroma hace un borrado lógico — es el comportamiento estándar de SQLite, que marca páginas como libres pero no reduce el tamaño del archivo sin un `VACUUM` explícito. Sin este fix, una demo pública de larga duración crecía en disco para siempre aunque el TTL "funcionara" | Se agregó un `VACUUM` después de cada `delete_collection()`. Confirmado con medición real: 5.2MB → 1.2MB después de borrar una sesión de 150 páginas, sin bloqueos ni errores de lock de SQLite dentro del propio proceso del servidor |
 | 10 | **Un `.docx` con una tabla perdía esa info en silencio** (sin error, sin aviso) | Pregunté el precio de un producto que SOLO estaba en una tabla del `.docx` → el agente escaló diciendo "no tengo esa información", aunque sí estaba en el archivo | `_extract_docx` solo iteraba `doc.paragraphs` — el atajo obvio de python-docx, que **no incluye el texto dentro de tablas**. Peor que un crash: es pérdida silenciosa de datos, el usuario nunca se enteraría de que falta información | Se reescribió para recorrer `doc.element.body` en orden real (párrafos y tablas intercaladas como aparecen en el documento), convirtiendo cada fila de tabla en una línea de texto indexable. Confirmado: ahora responde bien el precio de 3 productos distintos de la misma tabla |
 | 11 | **Encontrado por un usuario real probando a mano, no por mi QA**: "le pregunté algo y ya no me respondió más" | La UI no mostraba NADA mientras esperaba — ni un spinner, ni un mensaje de carga. Un request que tarda unos segundos (o se cuelga por cualquier motivo del lado de Gemini) se ve EXACTAMENTE igual que "el agente dejó de funcionar" | Dos causas combinadas: (a) la llamada a Gemini no tenía ningún timeout — si la API externa se degrada, el backend podía quedar esperando indefinidamente; (b) el frontend no tenía ningún indicador de carga ni deshabilitaba el botón de enviar, así que ni un delay normal de 1-2s se notaba, y mandar un segundo mensaje mientras el primero seguía en vuelo generaba más confusión todavía | Se agregó timeout de 20s a la llamada al LLM (cae al mensaje de escalamiento normal en vez de colgarse) + indicador visual "Pensando..." en el chat + el botón "Enviar" se deshabilita mientras espera, evitando el doble envío. Confirmado visualmente con captura de pantalla y confirmado que el guard anti-doble-envío funciona (un doble click solo generó 1 request real al servidor) |
+| 12 | **Migración a Telegram — encontrado por el usuario probando a mano**: mandó un PDF y un DOCX al mismo chat, y el bot "leyó uno solo" | El segundo documento subido pisaba al primero en silencio, sin ningún aviso | Cada sesión (= chat de Telegram) guardaba UN solo documento (`create_session` sobreescribía el dict entero), y los ids de Chroma eran secuenciales por índice (`f"{session_id}_{i}"`) — subir un segundo documento reusaba los mismos ids 0,1,2... y pisaba los chunks del primero en la base vectorial también | Rediseño: cada sesión ahora guarda una LISTA de documentos (`app/core/sessions.py`), los ids de Chroma pasan a `uuid4()` (sin colisión posible), y cada chunk lleva `filename` en su metadata. Las respuestas citan explícitamente de qué documento sale cada dato ("Según manual.pdf, X. Según politica.docx, Y.") — nunca mezclan información de documentos distintos como si fuera una sola fuente. Confirmado con un test que incluía un dato "trampa" (un número parecido en el documento equivocado) y no se confundió |
+| 13 | Pedido de resumen ("dame un resumen de X") escalaba con "no tengo esa información" aunque el documento sí tenía contenido | El LLM sí fue invocado (confirmado en el log: `generateContent` 200 OK), pero respondió `NO_SE` | "Resumen" no se parece semánticamente a ningún fragmento específico del documento, así que el retrieval por similitud (top-k=4) devolvía fragmentos random no representativos — insuficientes para armar un resumen real. El LLM, siguiendo correctamente la regla de "no inventar", no podía resumir con esos pedazos sueltos | Se separó una ruta nueva para resúmenes que NO usa similitud: detecta la intención ("resum", "de qué trata", etc.), identifica a qué documento se refiere por nombre de archivo (fuzzy match), y manda el documento COMPLETO al LLM (`store.get_all_chunks` + `llm.generate_summary`) en vez de top-k fragmentos |
+| 14 | El resumen se cortaba a mitad de documento con un aviso de truncamiento, en un documento que no era tan largo | `MAX_SUMMARY_CHARS` estaba en 25.000 caracteres — un número "prudente" puesto sin verificar nada | Verificado contra la API real de Gemini (`client.models.get`): el modelo soporta **1.048.576 tokens** de entrada (~4M caracteres). 25.000 caracteres usaba menos del 1% de lo disponible | Subido a 500.000 caracteres (~125K tokens) — cubre cualquier documento razonable con margen de sobra, sin dejar de tener un tope ante un archivo patológico. Timeout del LLM para resúmenes separado (60s en vez de 20s), porque un contexto mucho más grande tarda más en procesarse |
+| 15 | La detección de pedido de resumen fallaba con `"de que trata"` (sin tilde) aunque la keyword configurada era `"de qué trata"` | Mensaje normal de Telegram (la gente no tipea tildes) no disparaba la ruta de resumen | Comparación de substring exacta, sensible a acentos | Se agregó normalización de texto (saca acentos vía `unicodedata`) antes de comparar, tanto para la detección de intención como para el matching de nombre de archivo |
+| 16 | **Con varios documentos de nombres parecidos, el matching por nombre de archivo los matcheaba TODOS por igual** (no solo el correcto) | Pedir el resumen de un documento específico devolvía resúmenes de los 3 documentos cargados, no solo del pedido | Los archivos de prueba compartían un prefijo común (`qa3_`) — el umbral de "al menos el 50% de las palabras del nombre matchean" se cumplía para CUALQUIER documento con ese prefijo, aunque el resto del nombre no tuviera nada que ver. El mismo problema ocurriría con archivos reales que comparten convención de nombre (ej. `Contrato_2024_clienteA.pdf` vs `Contrato_2024_clienteB.pdf`) | Cambiado de "cualquiera que supere un piso flojo" a "solo el/los documento(s) con el MEJOR puntaje" — si hay un ganador claro, se usa solo ese; si varios empatan en el puntaje máximo, ahí sí se consideran todos genuinamente ambiguos |
+
+## Ronda 4 — migración a Telegram + soporte multi-formato en el bot
+
+QA explícito de PDF, TXT y DOCX sobre la versión Telegram, con los 3 formatos
+cargados simultáneamente en el mismo chat (10 casos, todos contra el motor
+real, no mockeados):
+
+1. Carga de PDF, TXT y DOCX (con tabla) al mismo chat — los 3 conviven, nada se pisa.
+2. Pregunta puntual sobre cada uno por separado — cita correctamente "página" (PDF) vs "sección" (TXT/DOCX).
+3. Pregunta que toca los 3 documentos a la vez en un solo mensaje — responde citando cada dato a su documento correcto, sin mezclar ("Según qa3_politicas.pdf, ... Según qa3_manual.txt, ... Según qa3_rrhh.docx, ...").
+4. Resumen de cada uno de los 3 formatos por separado — los 3 salen correctos y fieles al contenido real (verificado manualmente contra el texto fuente).
+
+10/10 casos OK. 2 bugs adicionales (#15 y #16 de la tabla) salieron de esta
+misma ronda al probar el matching de nombres con mensajes reales (sin
+tildes, con nombres de archivo parecidos entre sí).
 
 ## Agregado al soportar TXT y DOCX (además del bug #10 de arriba)
 
