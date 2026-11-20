@@ -1,5 +1,8 @@
 from google import genai
+from google.genai import types
 from app.core.config import GEMINI_API_KEY, GEMINI_MODEL
+
+LLM_TIMEOUT_MS = 20_000  # 20s — ver nota en _get_client sobre por qué hace falta
 
 SYSTEM_PROMPT = """Sos un asistente de soporte que responde preguntas SOLO usando el
 contexto que te paso a continuación (extraído de un documento real del usuario).
@@ -22,9 +25,19 @@ _client = None
 
 
 def _get_client():
+    """OJO (encontrado por un usuario probando a mano, no en mi QA): la
+    llamada a Gemini no tenía ningún timeout. Si la API de Google tarda o
+    se degrada, el request quedaba esperando indefinidamente — y como el
+    frontend tampoco tiene ningún indicador de carga, eso se ve EXACTAMENTE
+    igual que 'el agente dejó de responder', aunque técnicamente seguía
+    esperando. Con el timeout, como mucho tarda `LLM_TIMEOUT_MS` y cae al
+    mensaje de escalamiento normal en vez de colgarse."""
     global _client
     if _client is None:
-        _client = genai.Client(api_key=GEMINI_API_KEY)
+        _client = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=LLM_TIMEOUT_MS),
+        )
     return _client
 
 

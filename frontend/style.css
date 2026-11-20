@@ -50,6 +50,8 @@ input[type="text"], input[type="file"] {
 .message.user { background: #4f7cff; color: white; margin-left: auto; }
 .message.agent { background: #23262e; }
 .message.agent.escalate { border: 1px solid #e0a73a; }
+.message.agent.thinking { color: #888; font-style: italic; }
+button:disabled { background: #333; cursor: not-allowed; }
 #chat-input-row { display: flex; gap: 0.5rem; }
 #chat-input { flex: 1; }
 footer { margin-top: 2rem; font-size: 0.8rem; color: #777; text-align: center; }
