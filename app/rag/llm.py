@@ -13,8 +13,9 @@ Reglas estrictas:
   después de preguntar por el envío), usá el historial de abajo para entender a
   qué se refiere, pero respondé SOLO con información que esté en el contexto.
 - Nunca inventes información que no esté en el contexto.
-- Si el contexto no tiene NADA relacionado con la pregunta, respondé EXACTAMENTE
-  la palabra: NO_SE
+- Si el contexto no tiene NADA relacionado con la pregunta, respondé ÚNICA Y
+  EXACTAMENTE la palabra NO_SE — sin explicar por qué, sin texto antes ni
+  después, nada más que esa palabra sola.
 """
 
 _client = None
@@ -67,7 +68,12 @@ def generate_answer(question: str, context_chunks: list[dict], history: list[dic
             "error": str(exc),
         }
 
-    escalate = answer.upper().startswith("NO_SE")
+    # No usamos startswith: el LLM a veces agrega su razonamiento antes de
+    # la palabra clave a pesar de la instrucción explícita (encontrado en
+    # QA — ver TESTING.md). Buscar NO_SE en cualquier parte del texto es
+    # más robusto, y de paso evita filtrar ese razonamiento interno al
+    # usuario final.
+    escalate = "NO_SE" in answer.upper()
     if escalate:
         answer = "No tengo esa información en el documento. Te conecto con una persona del equipo para que te ayude mejor. 🙋"
 

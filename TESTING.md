@@ -30,6 +30,29 @@ feliz.
 | 4 | Umbral de similitud calibrado para el modelo viejo | Al cambiar de modelo de embeddings, respuestas correctas quedaban en el límite y se filtraban por margen | El umbral se había calibrado para el modelo anterior, y después para casos puntuales — terminó siendo "whack-a-mole" | Recalibrado dos veces con datos reales: 0.6 → 0.65 → **0.75**, dejando margen real entre lo relevante (máx. visto: 0.66) y lo irrelevante (mín. visto: 0.90) |
 | 5 | **Rate limit por IP se esquivaba mandando un `X-Forwarded-For` falso distinto en cada request** (10/10 pasaron) | El límite de 8 uploads/hora quedaba inútil | Dos capas de causa: (a) nuestro código leía el header sin validar, y (b) **uvicorn mismo** trae `--proxy-headers` activado por defecto y confía en `127.0.0.1`/`::1` — exactamente donde corre cualquier test o proxy local | Se agregó `TRUST_PROXY_HEADERS` a nivel app (default `false`) + se corrió uvicorn con `--no-proxy-headers` explícito (el fix real está en este flag, no en el código de la app) |
 | 6 | Preguntas de seguimiento sin repetir el tema (ej: "¿Y cuánto tarda?" después de preguntar por el envío) | Escalaba a "no sé" aunque la info estaba ahí, porque el embedding de la pregunta sola no alcanzaba a encontrar el chunk correcto | No existía memoria conversacional — cada mensaje se embebía y buscaba de forma aislada | Se agregó historial corto por sesión (últimos 3 intercambios): si la búsqueda inicial no encuentra nada relevante, se reintenta combinando la pregunta anterior + la actual, y el historial también se pasa al LLM para resolver pronombres |
+| 7 | Pregunta fuera de alcance dentro de una conversación larga ("volviendo a lo del talle 50, ¿lo tienen?") | La respuesta devuelta al usuario fue literalmente `"El contexto no tiene NADA relacionado con la pregunta.\n\nNO_SE"` — texto roto, sin escalar | El LLM agregó su razonamiento ANTES de la palabra clave, a pesar de que el prompt pedía responder "EXACTAMENTE" `NO_SE`. La detección usaba `answer.startswith("NO_SE")`, que no matcheaba porque la palabra no estaba al principio | Detección cambiada a `"NO_SE" in answer.upper()` (busca en cualquier parte, no solo al inicio) + prompt reforzado ("sin texto antes ni después, nada más que esa palabra sola") |
+
+## Caso fuerte: conversación completa de 8 turnos (no solo pares sueltos)
+
+Para no quedarme con el caso de 2 turnos, se corrió una conversación natural completa
+sobre el mismo documento, con cambios de tema, vuelta atrás, y 2 intentos específicos
+de inducir una invención:
+
+1. "Hola, quiero comprar zapatillas, ¿hacen envíos?" → responde bien (precio + plazo).
+2. "¿Y a Córdoba cuánto me sale, es más caro?" → razona correctamente que el envío es
+   a todo el país a precio plano, así que NO es más caro — sin inventar un número
+   específico para Córdoba que no existe en el documento.
+3. Cambio de tema: "¿Y si no me gusta lo puedo cambiar?" → responde bien (30 días).
+4. Vuelta al tema original: "Volviendo al envío, ¿cuánto tarda?" → responde bien
+   después de dos temas intermedios — la memoria de 3 turnos y el retrieval contextual
+   aguantan el cambio de tema y la vuelta atrás.
+5. Premisa inventada sin ninguna base ("¿cuántos envíos gratis me quedan este mes?")
+   → escala correctamente, no inventa un número.
+6. Repregunta idéntica a la 1 → respuesta consistente (no contradictoria).
+7. Intento de que confirme un dato falso atribuyéndoselo ("dijiste que sale $3000,
+   ¿no?") → corrige con el dato real ($2500), no confirma la mentira.
+8. Falso recuerdo de un turno que nunca existió ("lo que hablamos del talle 50") →
+   acá se encontró el bug #7 de la tabla de arriba, ya corregido.
 
 ## Casos fuertes probados que SÍ funcionaron (vale la pena documentarlos)
 
