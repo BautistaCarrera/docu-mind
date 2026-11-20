@@ -32,6 +32,23 @@ feliz.
 | 6 | Preguntas de seguimiento sin repetir el tema (ej: "¿Y cuánto tarda?" después de preguntar por el envío) | Escalaba a "no sé" aunque la info estaba ahí, porque el embedding de la pregunta sola no alcanzaba a encontrar el chunk correcto | No existía memoria conversacional — cada mensaje se embebía y buscaba de forma aislada | Se agregó historial corto por sesión (últimos 3 intercambios): si la búsqueda inicial no encuentra nada relevante, se reintenta combinando la pregunta anterior + la actual, y el historial también se pasa al LLM para resolver pronombres |
 | 7 | Pregunta fuera de alcance dentro de una conversación larga ("volviendo a lo del talle 50, ¿lo tienen?") | La respuesta devuelta al usuario fue literalmente `"El contexto no tiene NADA relacionado con la pregunta.\n\nNO_SE"` — texto roto, sin escalar | El LLM agregó su razonamiento ANTES de la palabra clave, a pesar de que el prompt pedía responder "EXACTAMENTE" `NO_SE`. La detección usaba `answer.startswith("NO_SE")`, que no matcheaba porque la palabra no estaba al principio | Detección cambiada a `"NO_SE" in answer.upper()` (busca en cualquier parte, no solo al inicio) + prompt reforzado ("sin texto antes ni después, nada más que esa palabra sola") |
 | 8 | **El servidor entero se congelaba mientras procesaba un upload pesado — para TODOS los usuarios, no solo el que subió el archivo** | Con un PDF de 150 páginas en proceso, 6 `/api/health` concurrentes (que deberían responder en milisegundos) tardaron **~29 segundos cada uno** | `/api/upload` estaba declarado `async def`, pero adentro hacía trabajo de CPU 100% síncrono (parseo de PDF + generación de embeddings) sin `await` real — eso corre directo en el event loop de asyncio, bloqueándolo por completo mientras dura. Un solo usuario subiendo un documento grande tumbaba la app para todos — el DoS más trivial posible, sin necesidad de ninguna técnica especial | Se cambió `upload_document` de `async def` a `def` normal (FastAPI lo corre automáticamente en un thread pool aparte) y `await file.read()` por `file.file.read()` (lectura síncrona). Confirmado con el mismo test: los health-checks pasaron de ~29s a **0.00-0.20s** mientras el upload pesado seguía corriendo en paralelo (17.6s) |
+| 9 | **El TTL de sesiones no liberaba disco de verdad** (el README/código decía "al expirar se borra la colección") | Una sesión expirada quedaba inaccesible a nivel API (404 correcto), pero el archivo `chroma.sqlite3` seguía pesando exactamente lo mismo | `client.delete_collection()` de Chroma hace un borrado lógico — es el comportamiento estándar de SQLite, que marca páginas como libres pero no reduce el tamaño del archivo sin un `VACUUM` explícito. Sin este fix, una demo pública de larga duración crecía en disco para siempre aunque el TTL "funcionara" | Se agregó un `VACUUM` después de cada `delete_collection()`. Confirmado con medición real: 5.2MB → 1.2MB después de borrar una sesión de 150 páginas, sin bloqueos ni errores de lock de SQLite dentro del propio proceso del servidor |
+
+## Casos pesados de producción (recursos, carga, memoria)
+
+- **Bloqueo del event loop** (bug #8 de la tabla): confirmado y corregido con un
+  experimento antes/después real, no en teoría.
+- **5 uploads pesados simultáneos** (150 páginas cada uno): los health-checks
+  siguieron respondiendo en milisegundos (0.00-0.24s) — el fix aguanta carga real,
+  no solo un caso aislado. Lo que sí pasa, y es razonable: cada upload individual
+  se hizo ~5x más lento (90s vs 17.6s) porque compiten por CPU vía el GIL —
+  degradación elegante, no un crash ni un cuelgue.
+- **PDF de 3000 páginas muy cortas ("bomba de cantidad")**: se procesó en 7.2s —
+  más rápido que el de 150 páginas con texto largo (17.6s). El cuello de botella
+  real es el volumen de texto a embeber, no la cantidad de páginas — no es una
+  debilidad nueva, es una aclaración honesta sobre qué es lo que realmente pesa.
+- **Limpieza de disco del TTL** (bug #9 de la tabla): confirmado con medición de
+  tamaño de archivo real antes/después, no asumido.
 
 ## Caso fuerte: conversación completa de 8 turnos (no solo pares sueltos)
 
@@ -85,12 +102,12 @@ de inducir una invención:
 
 ## Qué no se probó todavía (honesto, no es una lista completa)
 
-- **Múltiples uploads pesados concurrentes entre sí** (no solo uno pesado + health
-  checks livianos): con varios a la vez, el thread pool de FastAPI (default ~40
-  threads) y el GIL de Python van a hacer que cada uno individualmente tarde más
-  (compiten por CPU), aunque el event loop debería seguir respondiendo. No medido
-  todavía cuántos uploads simultáneos hacen falta para que la degradación sea
-  notoria para el usuario.
+- **Carpeta de índice HNSW huérfana**: el fix del `VACUUM` resuelve el leak grande
+  (el `.sqlite3`), pero cada colección borrada deja una carpeta chica (unos pocos
+  cientos de KB) con los archivos del índice HNSW que no se identifica ni se borra
+  de forma confiable desde afuera de Chroma sin depender de sus internals no
+  documentados. En una demo de larga duración esto sigue creciendo, aunque mucho
+  más lento que antes del fix.
 - **Concurrencia multi-worker**: el test de concurrencia de arriba corrió
   contra un único proceso de `uvicorn` (el default). El contador en memoria
   funciona ahí porque el GIL de CPython hace atómica la operación simple de
