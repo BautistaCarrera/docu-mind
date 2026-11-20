@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocuMind — Probá tu propio documento</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📄 DocuMind</h1>
+      <p>Subí un PDF (manual, catálogo, FAQ) y hacele preguntas. El agente responde citando la página — y si no sabe, te lo dice en vez de inventar.</p>
+    </header>
+
+    <section id="upload-section">
+      <input type="file" id="file-input" accept="application/pdf">
+      <button id="upload-btn">Subir documento</button>
+      <p id="upload-status"></p>
+    </section>
+
+    <section id="chat-section" style="display:none;">
+      <div id="chat-log"></div>
+      <div id="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Preguntale algo a tu documento...">
+        <button id="send-btn">Enviar</button>
+      </div>
+    </section>
+
+    <footer>
+      <p>Proyecto personal de <a href="https://github.com/BautistaCarrera" target="_blank">Bautista Carrera</a> — arquitectura RAG diseñada de punta a punta.</p>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
