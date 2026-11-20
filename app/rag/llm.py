@@ -27,6 +27,12 @@ Reglas estrictas:
   Nunca mezcles datos de documentos distintos como si fueran una sola
   afirmación sin aclarar la fuente de cada uno — eso sería inventar una
   relación entre los documentos que el contexto no dice.
+- Si te preguntan por un dato ESPECÍFICO (ej: la marca) y el contexto solo
+  tiene un dato PARECIDO pero distinto (ej: el modelo), NO los confundas
+  ni los uses como si fueran lo mismo — decí que el dato pedido no está,
+  aunque menciones el dato relacionado que sí encontraste. Ejemplo: si el
+  contexto dice "aspiradora X200" y preguntan la marca, "X200" es el
+  modelo, no la marca — nunca respondas "la marca es X200".
 """
 
 SUMMARY_SYSTEM_PROMPT = """Sos un asistente que resume documentos reales de forma fiel.

@@ -263,6 +263,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         metadatas = results.get("metadatas", [[]])[0]
         distances = results.get("distances", [[]])[0]
 
+    # Mensajes largos con relleno/rodeos antes de la pregunta real diluyen
+    # la pregunta en el embedding de toda la frase (medido en QA: con 50+
+    # palabras de relleno antes de la pregunta, la distancia pasa de 0.40 a
+    # 0.94 — deja de matchear). No es solo un caso de laboratorio: alguien
+    # real puede escribir un párrafo de contexto antes de ir al grano. Si
+    # los intentos de arriba fallaron y el mensaje es largo, reintentamos
+    # con solo la "cola" (últimos ~150 caracteres), donde suele estar la
+    # pregunta real.
+    if not any(dist <= SIMILARITY_THRESHOLD for dist in distances) and len(message) > 250:
+        tail_embedding = embed_texts([message[-150:]])[0]
+        results = query_collection(chat_id, tail_embedding, top_k=TOP_K)
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
+
     relevant_chunks = [
         {
             "text": d,

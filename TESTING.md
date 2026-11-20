@@ -65,6 +65,35 @@ real, no mockeados):
 misma ronda al probar el matching de nombres con mensajes reales (sin
 tildes, con nombres de archivo parecidos entre sí).
 
+| 17 | **Mensaje largo con relleno antes de la pregunta real diluía la pregunta en el embedding** — "hola hola hola... (x50+) cuanto cuesta el envío" escalaba mal aunque la info estuviera | Medido con precisión: la distancia coseno de la pregunta real sola es 0.40; con 20 palabras de relleno sube a 0.68 (todavía pasa el umbral 0.75); con 50+ palabras sube a 0.94 (deja de pasar) | El embedding de una frase completa es un promedio ponderado de todo su contenido — si el 90% del texto es relleno repetido, la pregunta real queda "ahogada" semánticamente, sin importar que esté ahí en texto plano. No es solo de laboratorio: un usuario real puede escribir un párrafo de contexto antes de ir al grano | Tercer nivel de reintento (después del normal y el de memoria conversacional): si el mensaje supera 250 caracteres y nada matcheó, se reintenta con solo los últimos 150 caracteres del mensaje, donde suele estar la pregunta real. Confirmado con el caso extremo (200 repeticiones de "hola"): sin el fix escalaba mal, con el fix responde bien |
+| 18 | **El LLM confunde "modelo" con "marca" cuando responde varias preguntas a la vez** (no determinístico: falló 1 de 3 intentos) | Pregunta compuesta de 3 partes ("¿cuánto cuesta el envío, cuántos días de vacaciones, y de qué marca es la aspiradora?") — el documento dice "aspiradora X200" (X200 es el MODELO), y a veces el LLM respondía "la marca es X200", una reclasificación incorrecta de un dato real (no es inventar un dato nuevo, es etiquetar mal un dato que sí existe) | Al resolver 3 preguntas en una sola respuesta, el LLM a veces no aplica con el mismo cuidado la regla de "no inventar" a cada sub-respuesta — la pregunta aislada (sin las otras 2) nunca falló en 5/5 intentos, pero la versión compuesta falló 1/3 | Se agregó una regla explícita al prompt: si piden un dato específico (marca) y el contexto solo tiene uno parecido pero distinto (modelo), no confundirlos — con el ejemplo concreto incluido en el prompt. Confirmado: 0/5 fallos después del fix (antes 1/3). Con un sistema basado en LLM nunca es garantía del 100%, pero reduce el riesgo medido |
+
+## Ronda 5 — batería amplia ("tira cualquier fruta"): conversación + inputs raros + adversarial
+
+15 casos variados contra el motor real, en una sola conversación con 3 documentos
+cargados a la vez:
+
+- **Conversación de 5 turnos** con cambio de tema, vuelta atrás e intento de hacer
+  confirmar un dato falso — los 5 correctos.
+- **Inputs raros**: un solo emoji, slang argentino agresivo ("boludo", sin acentos,
+  mal escrito a propósito), mensaje de 1000+ caracteres con relleno repetitivo — los
+  3 bien manejados (el último reveló el bug #17 de arriba, ya corregido).
+- **Intentos de confundir documentos a propósito**: atribuirle un dato de un
+  documento a otro ("el manual de la aspiradora dice que el envío cuesta...") y pedir
+  que confirme una mezcla de dos documentos sin relación — en ambos casos corrigió
+  la premisa en vez de seguirla.
+- **3 preguntas en un solo mensaje**, tocando los 3 documentos a la vez, con una de
+  las 3 sin respuesta en el contexto — respondió bien las 2 que sí estaban y no
+  inventó la tercera (reveló el bug #18 de arriba, ya corregido).
+- **Comandos de estado**: `/documentos` lista los 3 correctamente, resubir el mismo
+  archivo no duplica (actualiza), `/reset` limpia todo y la sesión deja de existir.
+
+15/15 casos OK en la corrida final (tras los fixes de los bugs #17 y #18). Nota
+honesta: una corrida intermedia mostró 1 falla no reproducible en un caso ya
+confirmado como correcto (variación normal de muestreo del LLM, no un bug de
+lógica) — con cualquier sistema basado en LLM hay que asumir que no es 100%
+determinístico, y está bien documentarlo así en vez de esconderlo.
+
 ## Agregado al soportar TXT y DOCX (además del bug #10 de arriba)
 
 - **Límite de retrieval con vocabulario muy repetitivo (no es un bug típico, es honesto documentarlo)**: se armó un `.txt` de 3000 líneas con palabras aleatorias de un pool chico — "descuento" aparecía como ruido en casi todos los chunks. Al preguntar por el código de descuento real (que estaba en una sola línea), el agente escaló mal porque el chunk correcto ni entraba en el top-20 de la búsqueda semántica — quedó enterrado entre cientos de chunks que lexicalmente se parecen por compartir la misma palabra de ruido. **Importante**: esto es un caso adversarial que yo mismo construí (puse la palabra clave de la respuesta real como palabra de relleno en todo el resto del documento) — no es representativo de un documento real. Se repitió el mismo test con contenido realista (oraciones coherentes, no ensalada de palabras) en un documento de tamaño similar y **funcionó perfecto**. Queda documentado como limitación conocida de `TOP_K=4` ante vocabulario muy repetitivo, no como un fix aplicado.
